@@ -2,154 +2,256 @@ import { Link } from "react-router-dom";
 import Button from "./Button";
 import OIcon from "./OIcon";
 import XIcon from "./XIcon";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useAppContext } from "../context/appContext";
 import Modal from "./Modal";
 
+// Constantes para mejorar la legibilidad
+const WINNING_COMBINATIONS = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8], // Horizontales
+    [0, 3, 6], [1, 4, 7], [2, 5, 8], // Verticales
+    [0, 4, 8], [2, 4, 6]             // Diagonales
+];
+
+const GAME_STATES = {
+    PLAYING: 'playing',
+    USER_WON: 'user_won',
+    CPU_WON: 'cpu_won',
+    DRAW: 'draw'
+};
+
+const CPU_THINKING_DELAY = 1500;
+
 const Game = () => {
-    const [board, setBoard] = useState(Array(9).fill(null));
-    const { currentTurn, setCurrentTurn, userPlayer, cpuPlayer } = useAppContext();
-    const [isCellsClicked, setIsCellsClicked] = useState(Array(9).fill(false));
-    const [isCpuThinking, setIsCpuThinking] = useState(Array(9).fill(false));
-    const [userWinsCounts, setUserWinsCounts] = useState(0);
-    const [cpuWinsCounts, setCpuWinsCounts] = useState(0);
-    const [isGameOver, setIsGameOver] = useState(false);
+    // Estados del juego
+    const [board, setBoard] = useState<(string | null)[]>(Array(9).fill(null));
+    const [gameState, setGameState] = useState(GAME_STATES.PLAYING);
     const [winningLine, setWinningLine] = useState<number[] | null>(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [userWins, setUserWins] = useState(false);
-    const [cpuWins, setCpuWins] = useState(false);
-    const [winner, setWinner] = useState<string | null>(null);
     
+    // Estados de interacción
+    const [isCpuThinking, setIsCpuThinking] = useState(Array(9).fill(false));
+    
+    // Contador de victorias
+    const [userWinsCounts, setUserWinsCounts] = useState(0);
+    const [cpuWinsCounts, setCpuWinsCounts] = useState(0);
+    const [drawCounts, setDrawCounts] = useState(0);
+    
+    // Context
+    const { currentTurn, setCurrentTurn, userPlayer, cpuPlayer } = useAppContext();
 
-    const XPlayer = userPlayer === 'X' ? 'YOU' : 'CPU';
-    const OPlayer = userPlayer === 'O' ? 'YOU' : 'CPU';
+    // Memoización de valores calculados
+    const playerLabels = useMemo(() => ({
+        X: userPlayer === 'X' ? 'YOU' : 'CPU',
+        O: userPlayer === 'O' ? 'YOU' : 'CPU'
+    }), [userPlayer]);
 
+    const scores = useMemo(() => ({
+        X: userPlayer === 'X' ? userWinsCounts : cpuWinsCounts,
+        O: userPlayer === 'O' ? userWinsCounts : cpuWinsCounts
+    }), [userPlayer, userWinsCounts, cpuWinsCounts]);
 
-    const handleOnClickGameBoardCell = (cellIndex: number) => {
-        if (board[cellIndex]) return;
+    // Función para verificar ganador
+    const checkWinner = useCallback((boardState: (string | null)[]) => {
+        for (const combination of WINNING_COMBINATIONS) {
+            const [a, b, c] = combination;
+            if (boardState[a] && 
+                boardState[a] === boardState[b] && 
+                boardState[a] === boardState[c]) {
+                return {
+                    winner: boardState[a],
+                    winningLine: combination
+                };
+            }
+        }
+        return null;
+    }, []);
+
+    // Función para verificar empate
+    const checkDraw = useCallback((boardState: (string | null)[]) => {
+        return boardState.every(cell => cell !== null);
+    }, []);
+
+    // Función para obtener celdas disponibles
+    const getAvailableCells = useCallback((boardState: (string | null)[]) => {
+        return boardState.map((cell, index) => cell === null ? index : null)
+                         .filter(index => index !== null);
+    }, []);
+
+    // Estrategia mejorada de CPU con niveles de dificultad
+    const getCpuMove = useCallback((boardState: (string | null)[]) => {
+        const availableCells = getAvailableCells(boardState);
+        if (availableCells.length === 0) return null;
+
+        // 1. Intentar ganar
+        for (const cell of availableCells) {
+            const testBoard = [...boardState];
+            testBoard[cell] = cpuPlayer;
+            if (checkWinner(testBoard)?.winner === cpuPlayer) {
+                return cell;
+            }
+        }
+
+        // 2. Bloquear al jugador
+        for (const cell of availableCells) {
+            const testBoard = [...boardState];
+            testBoard[cell] = userPlayer;
+            if (checkWinner(testBoard)?.winner === userPlayer) {
+                return cell;
+            }
+        }
+
+        // 3. Tomar el centro si está disponible
+        if (availableCells.includes(4)) {
+            return 4;
+        }
+
+        // 4. Tomar esquinas
+        const corners = [0, 2, 6, 8];
+        const availableCorners = corners.filter(corner => availableCells.includes(corner));
+        if (availableCorners.length > 0) {
+            return availableCorners[Math.floor(Math.random() * availableCorners.length)];
+        }
+
+        // 5. Movimiento aleatorio
+        return availableCells[Math.floor(Math.random() * availableCells.length)];
+    }, [cpuPlayer, userPlayer, getAvailableCells, checkWinner]);
+
+    // Función para procesar el resultado del juego
+    const processGameResult = useCallback((boardState: (string | null)[]) => {
+        const result = checkWinner(boardState);
+        
+        if (result) {
+            setWinningLine(result.winningLine);
+            const isUserWin = result.winner === userPlayer;
+            setGameState(isUserWin ? GAME_STATES.USER_WON : GAME_STATES.CPU_WON);
+            
+            if (isUserWin) {
+                setUserWinsCounts(prev => prev + 1);
+            } else {
+                setCpuWinsCounts(prev => prev + 1);
+            }
+            
+            setIsModalOpen(true);
+            return true;
+        }
+        
+        if (checkDraw(boardState)) {
+            setGameState(GAME_STATES.DRAW);
+            setDrawCounts(prev => prev + 1);
+            setIsModalOpen(true);
+            return true;
+        }
+        
+        return false;
+    }, [userPlayer, checkWinner, checkDraw]);
+
+    // Manejo de click en celda
+    const handleCellClick = useCallback((cellIndex: number) => {
+        if (board[cellIndex] || 
+            gameState !== GAME_STATES.PLAYING || 
+            currentTurn !== userPlayer) {
+            return;
+        }
 
         const newBoard = [...board];
         newBoard[cellIndex] = currentTurn;
         setBoard(newBoard);
-        setCurrentTurn(currentTurn === 'X' ? 'O' : 'X');
-        setIsCellsClicked(prev => {
-            const newCellsClicked = [...prev];
-            newCellsClicked[cellIndex] = true;
-            return newCellsClicked;
-        });
-        const winner = checkWinner(newBoard);
-        if (winner) {
-            setIsGameOver(true);
-            setIsModalOpen(true);
-            setUserWins(true);
-            setWinner(currentTurn);
-            setUserWinsCounts(prev => prev + 1);
-        } else if (newBoard.every(cell => cell !== null)) {
-            setIsModalOpen(true);
+        
+        
+
+        const gameEnded = processGameResult(newBoard);
+        
+        if (!gameEnded) {
+            setCurrentTurn(currentTurn === 'X' ? 'O' : 'X');
         }
-    }
-    const checkWinner = (board: (string | null)[]) => {
-        const winningCombinations = [
-            [0, 1, 2],
-            [3, 4, 5],
-            [6, 7, 8],
-            [0, 3, 6],
-            [1, 4, 7],
-            [2, 5, 8],
-            [0, 4, 8],
-            [2, 4, 6],
-        ];
-        for (const combination of winningCombinations) {
-            const [a, b, c] = combination;
-            if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-                setWinningLine(combination);
-                return true;
-            }
-        }
-        return null;
-    }
-    const onQuitGame = () => {
-        setBoard(Array(9).fill(null));
-        setCurrentTurn('X');
-        setIsCellsClicked(Array(9).fill(false));
-        setIsCpuThinking(Array(9).fill(false));
-        setWinningLine(null);
-        setWinner(null);
-    }
-    const getLineStyles = (combination: number[]) => {
-        // Líneas horizontales
-        if (combination.toString() === [0, 1, 2].toString()) return 'w-full top-[17%] left-0';
-        if (combination.toString() === [3, 4, 5].toString()) return 'w-full top-[50%] left-0';
-        if (combination.toString() === [6, 7, 8].toString()) return 'w-full top-[83%] left-0';
+    }, [board, gameState, currentTurn, userPlayer, processGameResult, setCurrentTurn]);
 
-        // Líneas verticales
-        if (combination.toString() === [0, 3, 6].toString()) return 'h-full w-[4px] left-[17%] top-0';
-        if (combination.toString() === [1, 4, 7].toString()) return 'h-full w-[4px] left-[50%] top-0';
-        if (combination.toString() === [2, 5, 8].toString()) return 'h-full w-[4px] left-[83%] top-0';
-
-        // Diagonales
-        if (combination.toString() === [0, 4, 8].toString()) return 'w-full top-[50%] left-0 rotate-45';
-        if (combination.toString() === [2, 4, 6].toString()) return 'w-full top-[50%] left-0 -rotate-45';
-
-        return '';
-    }
-    const resetGame = () => {
-        setBoard(Array(9).fill(null));
-        setCurrentTurn('X');
-        setIsCellsClicked(Array(9).fill(false));
-        setIsCpuThinking(Array(9).fill(false));
-        setWinningLine(null);
-        setIsGameOver(false);
-    }
+    // Efecto para manejar movimientos de CPU
     useEffect(() => {
-        const cpuMove = () => {
-            const availableCells = board.map((cell, index) => cell === null ? index : null).filter(index => index !== null);
-            if (availableCells.length === 0) return;
-            const randomIndex = Math.floor(Math.random() * availableCells.length);
-            const cellIndex = availableCells[randomIndex];
+        if (gameState !== GAME_STATES.PLAYING || currentTurn !== cpuPlayer) {
+            return;
+        }
+
+        const cpuMoveIndex = getCpuMove(board);
+        if (cpuMoveIndex === null) return;
+
+        // Mostrar animación de "pensando"
+        setIsCpuThinking(prev => {
+            const newState = [...prev];
+            newState[cpuMoveIndex] = true;
+            return newState;
+        });
+
+        const timeoutId = setTimeout(() => {
             const newBoard = [...board];
-            newBoard[cellIndex] = cpuPlayer;
-
-            setIsCellsClicked(prev => {
-                const newCellsClicked = [...prev];
-                newCellsClicked[cellIndex] = true;
-                return newCellsClicked;
-            });
+            newBoard[cpuMoveIndex] = cpuPlayer;
+            setBoard(newBoard);
+            
+            
             setIsCpuThinking(prev => {
-                const newCpuThinking = [...prev];
-                newCpuThinking[cellIndex] = true;
-                return newCpuThinking;
+                const newState = [...prev];
+                newState[cpuMoveIndex] = false;
+                return newState;
             });
-            setTimeout(() => {
-                setIsCpuThinking(prev => {
-                    const newCpuThinking = [...prev];
-                    newCpuThinking[cellIndex] = false;
-                    return newCpuThinking;
-                });
+
+            const gameEnded = processGameResult(newBoard);
+            
+            if (!gameEnded) {
                 setCurrentTurn(currentTurn === 'X' ? 'O' : 'X');
-                setBoard(newBoard);
-            }, 2000);
-
-            const winner = checkWinner(newBoard);
-
-            if (winner) {
-                setIsGameOver(true);
-                setCpuWins(true);
-                setWinner(cpuPlayer);
-                setIsModalOpen(true);
-                setCpuWinsCounts(prev => prev + 1);
-            } else if (newBoard.every(cell => cell !== null)) {
-                setIsModalOpen(true);
             }
-        }
-        if (isGameOver) return;
-        if (cpuPlayer === 'X' && currentTurn === 'X') {
-            cpuMove();
-        } else if (cpuPlayer === 'O' && currentTurn === 'O') {
-            cpuMove();
-        }
+        }, CPU_THINKING_DELAY);
 
-    }, [currentTurn, cpuPlayer, board, setCurrentTurn, isGameOver]);
+        return () => clearTimeout(timeoutId);
+    }, [currentTurn, cpuPlayer, board, gameState, getCpuMove, processGameResult, setCurrentTurn]);
+
+    // Función para resetear el juego
+    const resetGame = useCallback(() => {
+        setBoard(Array(9).fill(null));
+        setCurrentTurn('X');
+        setIsCpuThinking(Array(9).fill(false));
+        setWinningLine(null);
+        setGameState(GAME_STATES.PLAYING);
+        setIsModalOpen(false);
+    }, [setCurrentTurn]);
+
+    // Función para salir del juego
+    const quitGame = useCallback(() => {
+        resetGame();
+        // Aquí podrías agregar lógica adicional para volver al menú principal
+    }, [resetGame]);
+
+    // Función para obtener estilos de línea ganadora
+    const getLineStyles = useCallback((combination: number[]) => {
+        const combStr = combination.toString();
+        const styles = {
+            [WINNING_COMBINATIONS[0].toString()]: 'w-full top-[17%] left-0',
+            [WINNING_COMBINATIONS[1].toString()]: 'w-full top-[50%] left-0',
+            [WINNING_COMBINATIONS[2].toString()]: 'w-full top-[83%] left-0',
+            [WINNING_COMBINATIONS[3].toString()]: 'h-full w-[4px] left-[17%] top-0',
+            [WINNING_COMBINATIONS[4].toString()]: 'h-full w-[4px] left-[50%] top-0',
+            [WINNING_COMBINATIONS[5].toString()]: 'h-full w-[4px] left-[83%] top-0',
+            [WINNING_COMBINATIONS[6].toString()]: 'w-full top-[50%] left-0 rotate-45',
+            [WINNING_COMBINATIONS[7].toString()]: 'w-full top-[50%] left-0 -rotate-45'
+        };
+        return styles[combStr] || '';
+    }, []);
+
+    // Función para obtener el mensaje del modal
+    const getModalMessage = useCallback(() => {
+        switch (gameState) {
+            case GAME_STATES.USER_WON:
+                return { title: 'You Win!', winner: userPlayer };
+            case GAME_STATES.CPU_WON:
+                return { title: 'CPU Wins!', winner: cpuPlayer };
+            case GAME_STATES.DRAW:
+                return { title: "It's a Draw!", winner: null };
+            default:
+                return { title: '', winner: null };
+        }
+    }, [gameState, userPlayer, cpuPlayer]);
+
+    const modalMessage = getModalMessage();
 
     return (
         <section className="space-y-8 w-[340px] md:w-[520px] text-center">
@@ -172,32 +274,39 @@ const Game = () => {
             >
                 {winningLine && (
                     <div
-                        className={`absolute bg-red-400 transform ${getLineStyles(winningLine)} h-2 transition-all rounded-lg`}
+                        className={`absolute bg-red-400 transform ${getLineStyles(winningLine)} h-2 transition-all duration-500 rounded-lg z-10`}
                     />
                 )}
                 {board.map((cell, index) => (
                     <div
                         id={`cell-${index}`}
                         key={index}
-                        className={`w-full h-full p-5 border-gray-300 ${index < 6 ? 'border-b-2' : '' // Línea inferior para las primeras dos filas
-                            } ${index % 3 !== 2 ? 'border-r-2' : ''}`} // Línea derecha para las primeras dos columnas
+                        className={`w-full h-full p-5 border-gray-300 ${
+                            index < 6 ? 'border-b-2' : ''
+                        } ${
+                            index % 3 !== 2 ? 'border-r-2' : ''
+                        }`}
                     >
-                        <div className={`size-full rounded-2xl
-                                ${currentTurn === 'X' && !isCellsClicked[index] ? 'hover:bg-blue-100' :
-                                currentTurn === 'O' && !isCellsClicked[index] ? 'hover:bg-orange-100' : ''}
-                                ${isCellsClicked[index] ? 'cursor-not-allowed' : 'cursor-pointer'}
-                                ${isCpuThinking[index] ? 'bg-orange-100 animate-pulse' : ''}
-                                `}
-                            onClick={() => handleOnClickGameBoardCell(index)}
+                        <div 
+                            className={`size-full rounded-2xl transition-all duration-200 ${
+                                !cell && gameState === GAME_STATES.PLAYING && currentTurn === userPlayer
+                                    ? currentTurn === 'X' 
+                                        ? 'hover:bg-blue-100 cursor-pointer' 
+                                        : 'hover:bg-orange-100 cursor-pointer'
+                                    : 'cursor-not-allowed'
+                            } ${
+                                isCpuThinking[index] ? 'bg-orange-100 animate-pulse' : ''
+                            }`}
+                            onClick={() => handleCellClick(index)}
                         >
-                            {cell ? (
-                                cell === 'X' ? (
-                                    <XIcon className="size-full" />
-                                ) : (
-                                    <OIcon className="size-full" />
-                                )
-                            ) : (
-                                ''
+                            {cell && (
+                                <div className="size-full animate-fade-in">
+                                    {cell === 'X' ? (
+                                        <XIcon className="size-full" />
+                                    ) : (
+                                        <OIcon className="size-full" />
+                                    )}
+                                </div>
                             )}
                         </div>
                     </div>
@@ -205,14 +314,18 @@ const Game = () => {
             </div>
 
             {/* Score Section */}
-            <div className="flex justify-between w-full">
-                <div className="bg-[var(--primary)]  py-2 px-22 rounded-lg shadow-md flex flex-col items-center">
-                    <span className="text-lg">X ({XPlayer})</span>
-                    <span className="text-2xl font-bold">{userPlayer === 'X' && cpuPlayer === 'O' ? userWinsCounts : cpuPlayer === 'X' && userPlayer === 'O' ? cpuWinsCounts : ''}</span>
+            <div className="flex justify-between w-full gap-4">
+                <div className="bg-[var(--primary)] py-3 px-6 rounded-lg shadow-md flex-1 flex flex-col items-center">
+                    <span className="text-lg font-medium">X ({playerLabels.X})</span>
+                    <span className="text-3xl font-bold">{scores.X}</span>
                 </div>
-                <div className="bg-[var(--secondary)]  py-2 px-22 rounded-lg shadow-md flex flex-col items-center">
-                    <span className="text-lg">O ({OPlayer})</span>
-                    <span className="text-2xl font-bold">{cpuPlayer === 'O' && userPlayer === 'X' ? cpuWinsCounts : userPlayer === 'O' && cpuPlayer === 'X' ? userWinsCounts : ''}</span>
+                <div className="bg-gray-600 py-3 px-6 rounded-lg shadow-md flex-1 flex flex-col items-center">
+                    <span className="text-lg font-medium text-white">DRAWS</span>
+                    <span className="text-3xl font-bold text-white">{drawCounts}</span>
+                </div>
+                <div className="bg-[var(--secondary)] py-3 px-6 rounded-lg shadow-md flex-1 flex flex-col items-center">
+                    <span className="text-lg font-medium">O ({playerLabels.O})</span>
+                    <span className="text-3xl font-bold">{scores.O}</span>
                 </div>
             </div>
 
@@ -221,54 +334,59 @@ const Game = () => {
                 <Button
                     className="w-full"
                     variant="tertiary"
-                    onClick={() => {
-                        resetGame();
-                    }}
+                    onClick={resetGame}
                 >
-                    Reset Game
+                    New Game
                 </Button>
             </Link>
+
+            {/* Modal de resultado */}
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)}>
-                <div className="text-center flex flex-col items-center justify-center">
-                    <h2 className="mb-4 text-2xl font-bold text-white">
-                            {userWins ? 'You Win!' : cpuWins ? 'CPU Wins!' : 'It\'s a Draw!'}
-                        </h2>
-                    <div className="flex items-center justify-center mb-4">
-                        {winner && (
-                            winner === 'X' ? (
-                                <XIcon className="size-[128px]" />
-                            ) : (
-                                <OIcon className="size-[128px]" />
-                            )
-                        )}
-                        <h3 className={`${winner === 'X' ? 'text-[var(--primary)]' : 'text-[var(--secondary)]'} text-6xl font-extrabold`}>WON THIS GAME</h3>
-                    </div>
-                    <div className="flex justify-center gap-5">
-                        
-                            <Button
-                                className="w-[264px]"
-                                variant="tertiary"
-                                onClick={() => {
-                                    onQuitGame();
-                                    setIsModalOpen(false)
-                                }}
-                            >
-                                
-                                QUIT
-                                
-                            </Button>
-                        <Link to="/pick-player" className="block">
-                            <Button
-                                className="w-[264px]"
-                                variant="primary"
-                                onClick={() => {
-                                    resetGame();
-                                    setIsModalOpen(false);
-                                }}
-                            >
-                            NEW GAME
-                            </Button>
-                        </Link>
+                <div className="text-center flex flex-col items-center justify-center space-y-6">
+                    <h2 className="text-3xl font-bold text-white">
+                        {modalMessage.title}
+                    </h2>
+                    
+                    {modalMessage.winner && (
+                        <div className="flex items-center justify-center space-x-4">
+                            <div className="animate-bounce">
+                                {modalMessage.winner === 'X' ? (
+                                    <XIcon className="size-[128px]" />
+                                ) : (
+                                    <OIcon className="size-[128px]" />
+                                )}
+                            </div>
+                            <h3 className={`${
+                                modalMessage.winner === 'X' 
+                                    ? 'text-[var(--primary)]' 
+                                    : 'text-[var(--secondary)]'
+                            } text-4xl md:text-6xl font-extrabold`}>
+                                TAKES THE ROUND
+                            </h3>
+                        </div>
+                    )}
+                    
+                    <div className="flex justify-center gap-4 w-full">
+                        <Button
+                            className="flex-1 max-w-[200px]"
+                            variant="tertiary"
+                            onClick={() => {
+                                quitGame();
+                                setIsModalOpen(false);
+                            }}
+                        >
+                            QUIT
+                        </Button>
+                        <Button
+                            className="flex-1 max-w-[200px]"
+                            variant="primary"
+                            onClick={() => {
+                                resetGame();
+                                setIsModalOpen(false);
+                            }}
+                        >
+                            NEXT ROUND
+                        </Button>
                     </div>
                 </div>
             </Modal>
