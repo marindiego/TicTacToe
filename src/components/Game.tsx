@@ -5,6 +5,7 @@ import XIcon from "./XIcon";
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useAppContext } from "../context/appContext";
 import Modal from "./Modal";
+import { GameBoard } from "./GameBoard";
 
 // Constantes para mejorar la legibilidad
 const WINNING_COMBINATIONS = [
@@ -268,7 +269,17 @@ const Game = () => {
             </div>
 
             {/* Game Board */}
-            <div
+            <GameBoard
+                board={board}
+                winningLine={winningLine}
+                gameState={gameState}
+                isCpuThinking={isCpuThinking}
+                getLineStyles={getLineStyles}
+                onCellClick={handleCellClick}
+                currentTurn={currentTurn}
+                userPlayer={userPlayer}
+            />
+            {/* <div
                 id="game-board"
                 className="relative grid grid-cols-3 grid-rows-3 gap-0 place-items-center size-[520px] bg-white rounded-lg shadow-md p-5"
             >
@@ -311,7 +322,7 @@ const Game = () => {
                         </div>
                     </div>
                 ))}
-            </div>
+            </div> */}
 
             {/* Score Section */}
             <div className="flex justify-between w-full gap-4">
